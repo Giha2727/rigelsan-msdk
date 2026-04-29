@@ -1,0 +1,2 @@
+# rigelsan-msdk
+msdk
