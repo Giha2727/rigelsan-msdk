@@ -1,0 +1,33 @@
+# =============================================================
+# Rigelsan MSDK Test — ProGuard Rules
+# =============================================================
+# DJI MSDK V5 reflection ve native call kullanır. Bu sınıflar
+# obfuscate edilirse runtime'da NoClassDefFoundError veya
+# UnsatisfiedLinkError oluşur. ASLA değiştirme.
+# =============================================================
+
+# DJI MSDK — tüm sınıflar korunsun
+-keep class dji.** { *; }
+-keep class com.dji.** { *; }
+-keep class dji.v5.** { *; }
+
+# Native interface katmanı
+-keep class dji.jni.** { *; }
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# DJI SDK callback interfaces
+-keep interface dji.** { *; }
+-keep interface com.dji.** { *; }
+
+# Reflection ile çağrılan annotated sınıflar
+-keepattributes Signature,InnerClasses,EnclosingMethod
+-keepattributes *Annotation*
+
+# Uygulama sınıfları
+-keep class com.rigelsan.msdktest.** { *; }
+
+# Source line bilgisi (crash log debug için)
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

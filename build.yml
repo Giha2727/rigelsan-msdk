@@ -1,0 +1,232 @@
+# Rigelsan MSDK Test — Drone Bağlantı Doğrulama Uygulaması
+
+**RIGELSAN ARGE SAVUNMA — DJI MSDK V5 Sağlık Testi**
+
+EGM Kenevir Tespit APK'sının çalışmamasının sebebini kanıtlamak için yazılan minimal MSDK V5 uygulaması. Drone'a bağlanır, telemetriyi gösterir, kamera akışını gösterir. **Tespit, ONNX, alan tarama yok** — sadece bağlantı doğrulama.
+
+---
+
+## EGM'nin yaptığı bug — bizim önlediğimiz
+
+Kenevir Tespit APK'sının logcat çıktısında:
+
+```
+NoClassDefFoundError: Failed resolution of: Ldji/v5/manager/SDKManager;
+```
+
+Sebep: EGM'nin `app/build.gradle` dosyasında DJI MSDK dependency'sini yanlış yazılması. **Sadece `compileOnly` kullanılmış, `implementation` satırı eksik.**
+
+Bu projede o hatayı yapmamak için `app/build.gradle.kts` içinde **üç dependency satırı**nı doğru yazdık:
+
+```kotlin
+implementation("com.dji:dji-sdk-v5-aircraft:5.17.0")          // ← runtime sınıfları
+compileOnly("com.dji:dji-sdk-v5-aircraft-provided:5.17.0")    // ← compile API
+runtimeOnly("com.dji:dji-sdk-v5-networkImp:5.17.0")           // ← network impl
+```
+
+**Üçü olmadan APK derlenir ama runtime'da crash eder.**
+
+---
+
+## Build adımları
+
+### 1. DJI Developer hesabında yeni App Key oluştur
+
+https://developer.dji.com/user/apps adresine git → "Create App" → bilgileri doldur:
+
+```
+SDK Type        : Mobile SDK
+App Name        : Rigelsan MSDK Test
+Software Platform: Android
+Package Name    : com.rigelsan.msdktest    ← KESİNLİKLE BU OLMALI
+Category        : Public Safety
+Description     : MSDK V5 connectivity test
+```
+
+Kaydet → DJI mail gönderir → linke tıkla → App Key oluşturulur.
+
+### 2. App Key'i projeye yapıştır
+
+`app/src/main/res/values/strings.xml` dosyasını aç, şu satırı bul:
+
+```xml
+<string name="dji_api_key">YOUR_DJI_APP_KEY_HERE</string>
+```
+
+`YOUR_DJI_APP_KEY_HERE` yerine DJI'den aldığın 32 karakter hex string'i yapıştır.
+
+### 3. Android Studio'da projeyi aç
+
+```
+File → Open → RigelsanMSDK klasörünü seç
+```
+
+İlk Gradle sync 5-15 dakika sürer (DJI MSDK V5 ~250MB native lib indiriyor).
+
+### 4. APK build
+
+**Debug build (test için):**
+
+```bash
+./gradlew assembleDebug
+# Çıktı: app/build/outputs/apk/debug/app-debug.apk
+```
+
+**Release build (signed):**
+
+```bash
+./gradlew assembleRelease \
+    -PkeystorePath=/path/to/rigelsan-kenevir-release.jks \
+    -PkeystorePassword=rigelsan2026 \
+    -PkeyAlias=rigelsan-kenevir \
+    -PkeyPassword=rigelsan2026
+```
+
+### 5. APK doğrulaması
+
+Build sonrası APK içinde DJI MSDK'nın gerçekten gömülü olduğunu kontrol et:
+
+```bash
+unzip -l app-debug.apk | grep "lib/arm64-v8a/lib" | wc -l
+# Beklenen: 40+ (DJI native lib'leri)
+
+# DEX'te dji.v5.manager.SDKManager var mı?
+unzip -p app-debug.apk classes.dex | strings | grep "dji.v5.manager.SDKManager"
+# Beklenen: en az bir satır eşleşme
+```
+
+**Eğer ikinci komut hiç çıktı vermezse — EGM'nin yaptığı hatayı yapmışsın demektir, build.gradle'ı kontrol et.**
+
+---
+
+## RC Plus 2'ye yükleme
+
+```bash
+adb devices                       # cihaz görünüyor mu?
+adb install -r app-debug.apk      # yükle
+adb logcat -c                     # log temizle
+adb logcat | grep -iE "RAS\.|dji|msdk" > rigelsan-log.txt   # log başlat
+```
+
+Sonra RC Plus 2'de Rigelsan MSDK uygulamasını aç:
+
+1. **İzin pop-up'ları** çıkacak — hepsine "İzin Ver"
+2. **Splash ekranı** "DJI MSDK V5 BAŞLATILIYOR" gösterecek
+3. **Init progress** "INITIALIZE_COMPLETE (100%)" göstermeli
+4. **Registration** başarılı olmalı: "✓ KAYIT BAŞARILI"
+5. **Drone'u aç** — splash ekranında "Drone bağlandı" mesajı
+6. **MainActivity** açılır — telemetri ve kamera akışı gelir
+
+### Beklenen sonuçlar
+
+| Aşama | Beklenen | Sorun varsa |
+|---|---|---|
+| Splash başlatma | `INITIALIZE_COMPLETE` | MSDK init failure → build hatası |
+| Registration | `✓ KAYIT BAŞARILI` | App Key veya internet sorunu |
+| Drone bağlantısı | `Drone bağlandı (id: ...)` | RC ↔ drone fiziksel bağlantı |
+| Telemetri | Batarya, GPS, konum dolar | KeyManager subscription sorunu |
+| Kamera | Surface'da canlı görüntü | M4T'de kamera index farklı olabilir |
+
+---
+
+## Test senaryoları
+
+### Senaryo A — Her şey çalışırsa
+
+✓ Senin DJI hesabın sağlam, App Key doğru, donanım sağlam.
+✓ Sorun **kesinlikle** EGM'nin Kenevir Tespit APK'sının build.gradle'ında.
+✓ EGM'ye bu mesajı at: "build.gradle'da DJI dependency `compileOnly` yerine `implementation` ile yazılmalı, kanıt elimde."
+
+### Senaryo B — Registration fail
+
+❌ App Key yanlış veya internet yok.
+- Logcat'e bak, `INVALID_APP_KEY` mı `NETWORK_ERROR` mı?
+- `INVALID_APP_KEY` → DJI portalında package name'i ve key'i kontrol et
+- `NETWORK_ERROR` → RC Plus 2'yi WiFi'ye bağla
+
+### Senaryo C — Registration OK ama drone gelmedi
+
+❌ Donanım/firmware sorunu.
+- Pilot 2 ile drone bağlanıyor mu? Bağlanmıyorsa firmware update gerek.
+- Bağlanıyorsa, MSDK product enum'ında M4T kayıtlı olmayabilir.
+
+### Senaryo D — Drone bağlandı ama kamera akışı gelmedi
+
+⚠ Kamera index sorunu.
+- M4T 4 kamera (Wide/Zoom/Tele/Thermal). Default `LEFT_OR_MAIN` Wide olur.
+- Akış gelmezse kodda `cameraIndex` değiştir: `ComponentIndexType.RIGHT`, `UP`, vs.
+
+---
+
+## Dosya yapısı
+
+```
+RigelsanMSDK/
+├── build.gradle.kts                     # Root config
+├── settings.gradle.kts                  # Module list
+├── gradle.properties                    # Build flags
+├── gradle/wrapper/
+│   └── gradle-wrapper.properties        # Gradle 8.7
+├── app/
+│   ├── build.gradle.kts                 # ⚠ KRİTİK: DJI dependencies
+│   ├── proguard-rules.pro               # ⚠ KRİTİK: DJI keep rules
+│   └── src/main/
+│       ├── AndroidManifest.xml          # ⚠ KRİTİK: DJI services + USB filter
+│       ├── java/com/rigelsan/msdktest/
+│       │   ├── RasMsdkApplication.kt    # MultiDex + Helper.install
+│       │   ├── SplashActivity.kt        # SDKManager.init + registration
+│       │   └── MainActivity.kt          # KeyManager telemetry + camera
+│       └── res/
+│           ├── layout/                  # Splash + Main XML
+│           ├── values/                  # Colors, strings, themes, styles
+│           ├── drawable/                # HUD backgrounds, icons
+│           ├── xml/
+│           │   └── accessory_filter.xml # USB DJI accessory
+│           └── mipmap-anydpi-v26/       # Adaptive launcher icon
+```
+
+---
+
+## DJI MSDK V5 Notları
+
+**MSDK V5 versiyon:** `5.17.0` (Nisan 2026)
+
+Daha güncel sürüm çıkarsa `app/build.gradle.kts` içinde `djiSdkVersion` değişkenini güncelle:
+
+```kotlin
+val djiSdkVersion = "5.18.0"  // örnek
+```
+
+Release notes: https://github.com/dji-sdk/Mobile-SDK-Android-V5/releases
+
+**Desteklenen drone'lar (5.17.0):**
+- Mavic 3 Enterprise series
+- Matrice 30 series
+- Matrice 350 RTK
+- **Matrice 4 series (4D, 4E, 4T)** ← bizim hedef
+- Mini 3, Mini 3 Pro, Mini 4 Pro
+
+---
+
+## Sonraki adımlar (uygulama bağlanırsa)
+
+Bu uygulama **çalışırsa** Rigelsan'ın kendi MSDK V5 entegrasyonunu kurmuş olur. Üzerine eklenecekler:
+
+1. **ONNX Runtime entegrasyonu** — `kenevir_model.onnx`'i yükleyip kamera frame'i üzerinde inference
+2. **Tespit overlay'i** — frame üstüne YOLO bbox çizimi
+3. **MAVLink + Proportional Navigation** — RAS projesindeki gibi guidance
+4. **Alan tarama mantığı** — waypoint mission generation
+5. **Tespit history + raporlama** — Room DB ile
+
+---
+
+## Lisans ve İletişim
+
+**© 2026 Rigelsan ARGE Savunma Güvenlik Teknolojileri A.Ş.**
+
+Geliştirici: Hazar / Rigelsan
+DJI MSDK V5 Developer App ID: 183415
+Hedef cihaz: DJI RC Plus 2 (Android 13)
+Hedef drone: DJI Matrice 4T
+
+*Son güncelleme: Nisan 2026*

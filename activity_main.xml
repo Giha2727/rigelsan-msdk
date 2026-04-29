@@ -1,0 +1,144 @@
+// =============================================================
+// Rigelsan MSDK Test — App Module Build
+// =============================================================
+//
+// !! KRİTİK NOT — EGM-IHA Ofisi'nin Kenevir Tespit APK'sındaki bug !!
+//
+// EGM'nin APK'sında 'dji.v5.manager.SDKManager' sınıfı APK içinde yoktu,
+// runtime'da ClassNotFoundException atıyordu. Sebep: build.gradle'da DJI
+// dependency'leri sadece compileOnly olarak tanımlanmış, implementation
+// satırı eksik bırakılmıştı. Bu APK derlenir ama runtime'da çalışmaz.
+//
+// AŞAĞIDAKİ ÜÇ SATIRI ASLA DEĞİŞTİRME — DJI MSDK V5 üç dependency ile gelir:
+//
+//   1. implementation  → APK'ya gerçek sınıfları ekler        (RUNTIME)
+//   2. compileOnly     → Sadece compile-time interface'leri    (COMPILE)
+//   3. runtimeOnly     → Network katmanını runtime'a ekler     (RUNTIME)
+//
+// Bu üçü olmadan APK derlenir ama çalışmaz. EGM'nin hatası budur.
+// =============================================================
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.rigelsan.msdktest"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.rigelsan.msdktest"
+        minSdk = 24
+        targetSdk = 33   // DJI MSDK V5 dokümanı 33'ü öneriyor (34'te bilinen sorunlar var)
+        versionCode = 1
+        versionName = "1.0.0"
+
+        // DJI MSDK V5 64-bit zorunlu, 32-bit varyantları kapatıyoruz
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+
+        // multidex zorunlu — DJI MSDK 65k metot sınırını aşıyor
+        multiDexEnabled = true
+    }
+
+    signingConfigs {
+        create("release") {
+            val keystorePath = project.findProperty("keystorePath") as String?
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = project.findProperty("keystorePassword") as String?
+                keyAlias = project.findProperty("keyAlias") as String?
+                keyPassword = project.findProperty("keyPassword") as String?
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            isDebuggable = true
+            isMinifyEnabled = false
+            applicationIdSuffix = ".debug"
+        }
+        release {
+            isMinifyEnabled = false  // DJI MSDK ile ProGuard kullanılıyorsa keep rules eklenmeli
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            if (project.hasProperty("keystorePath")) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
+    // DJI MSDK uses native libs — bunları compress etme
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true   // DJI MSDK V5 için ZORUNLU
+        }
+        resources {
+            excludes += listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/rxjava.properties"
+            )
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+    }
+}
+
+// =============================================================
+// DJI MSDK V5 — DEPENDENCY YÖNETİMİ
+// =============================================================
+// DJI MSDK V5 versiyon: 5.17.0 (Nisan 2026 itibarıyla en güncel stable)
+// Daha güncel sürüm için: https://github.com/dji-sdk/Mobile-SDK-Android-V5/releases
+// =============================================================
+
+val djiSdkVersion = "5.17.0"
+
+dependencies {
+    // ----- DJI MSDK V5 — ÜÇ SATIR DA OLMAK ZORUNDA -----
+
+    // 1. Aircraft main package — RUNTIME sınıflarını APK'ya gömer
+    //    Bu satır olmadan: NoClassDefFoundError: dji.v5.manager.SDKManager
+    implementation("com.dji:dji-sdk-v5-aircraft:$djiSdkVersion")
+
+    // 2. Aircraft compile-time API — sadece compile zamanı, runtime'a gitmez
+    //    Bu satır olmadan: compile errors
+    compileOnly("com.dji:dji-sdk-v5-aircraft-provided:$djiSdkVersion")
+
+    // 3. Network implementation — DJI sunucusu ile iletişim için
+    //    Bu satır olmadan: registration network failures
+    runtimeOnly("com.dji:dji-sdk-v5-networkImp:$djiSdkVersion")
+
+    // ----- AndroidX core -----
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.4")
+    implementation("androidx.multidex:multidex:2.0.1")
+    implementation("com.google.android.material:material:1.12.0")
+
+    // ----- Kotlin coroutines (telemetri akışı için) -----
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+}
